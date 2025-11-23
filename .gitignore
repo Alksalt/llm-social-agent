@@ -1,0 +1,110 @@
+# ----------------------------------------
+# Python & ML Project .gitignore
+# ----------------------------------------
+
+### Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pdb
+*.pkl
+*.pickle
+*.h5
+*.pt
+*.pth
+*.npy
+*.npz
+*.ckpt
+*.onnx
+
+# Compiled binaries
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+*.venv/
+
+# Jupyter
+.ipynb_checkpoints/
+.jupyter/
+*.ipynb_export
+
+# Logs
+logs/
+*.log
+*.out
+*.err
+
+### Machine Learning / Data
+# For this project:
+# - data/ will contain agent_posts.db, diary.txt, x_threads.txt
+# - We NEVER want to commit those (they contain personal text and local DB)
+data/
+datasets/
+dataset/
+raw_data/
+processed_data/
+checkpoints/
+models/
+outputs/
+experiments/
+wandb/
+mlruns/
+tensorboard/
+lightning_logs/
+cache/
+.cache/
+tmp/
+temp/
+
+# HuggingFace
+huggingface/
+hf_cache/
+huggingface_cache/
+transformers_cache/
+
+### PyTorch / Training cache
+*.ptl
+*.bin
+*.safetensors
+*.tfevents.*
+
+### VSCode
+.vscode/
+*.code-workspace
+
+### PyCharm / IntelliJ
+.idea/
+*.iml
+
+### System junk
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+### Docker
+docker-data/
+*.pid
+
+###dbs
+*.db
+
+### Environment Files (optional)
+# For this project: .env holds all API keys and DB overrides – must stay local.
+.env
+.env.*
+*.secret
+secrets/
+credentials/
+
+# ----------------------------------------
+# END
+# ----------------------------------------

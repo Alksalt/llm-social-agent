@@ -1,0 +1,43 @@
+# Global configuration for the agentic social diary project.
+
+llm:
+  provider: openai          
+  model: gpt-5-mini       
+  temperature: 0.7
+
+pricing:
+  gpt-5-mini:
+    input_per_1k: 0.00025   # USD
+    output_per_1k: 0.00200  # USD
+
+modes:
+  dry_run: true
+  llm_enabled: true
+
+platforms:
+  x_enabled: false
+  threads_enabled: false
+  linkedin_enabled: true
+
+
+platform_limits:
+  x_max_chars: 240          
+  threads_max_chars: 300    
+  linkedin_max_chars: 2000
+
+posting_limits:
+  linkedin_per_week: 3
+  
+x_api:
+  base_url: https://api.x.com
+threads_api:
+  base_url: https://graph.threads.net
+linkedin_api:
+  base_url: https://api.linkedin.com
+
+database:
+  url: data/agent_posts.db
+
+input_files:
+  diary_path: data/diary.txt
+  x_threads_path: data/x_threads.txt

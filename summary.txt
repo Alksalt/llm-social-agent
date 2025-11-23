@@ -1,0 +1,69 @@
+Agentic Social Diary pipeline (high-level walkthrough)
+======================================================
+
+Configuration
+- config/settings.yaml drives behavior. Key flags:
+  - modes.dry_run: simulate publishing when true.
+  - modes.llm_enabled: when true generate drafts via LLM; when false reuse raw input text.
+  - platforms.*_enabled: toggles per platform.
+  - platform_limits.*_max_chars: character ceilings for validation.
+  - posting_limits.linkedin_per_week: throttle for LinkedIn.
+  - database.url: SQLite file path (defaults to data/agent_posts.db).
+
+Entry point: src/main.py
+- init_db(): ensure SQLite schema exists.
+- get_config(): load YAML + env overrides.
+- read_text_file(): load x_threads_path then diary_path.
+- For each file, _run_for_source() calls process_diary_text(); collects diary_ids.
+- review_drafts_interactive(): human y/n approval per draft (required before publishing).
+- run_publishing_pipeline(): publish approved drafts (dry-run aware).
+
+Pipeline: src/core/orchestrator.py::process_diary_text
+- Strip text; return early if empty or duplicate (source-aware hash).
+- Store diary row in DB.
+- If llm_enabled:
+  - summarize_diary(): LLM summary.
+  - generate_*_post_from_diary(): platform drafts.
+  - validate_*(): check against char limits; regenerate once if too long.
+- If llm_enabled is false:
+  - Skip LLM calls; use raw text for every enabled platform.
+  - Validate length (no regeneration) and keep notes.
+- Store each draft in posts table with status="draft".
+- Return summary + posts metadata.
+
+Review: src/core/review.py
+- Filter drafts by allowed_diary_ids and enabled platforms.
+- Print content and prompt for approval; set_post_status(draft, "approved") on yes.
+
+Publishing: src/core/publisher.py
+- Load config: dry_run flag, platform enablement, LinkedIn weekly cap.
+- get_approved_posts(): fetch posts (optionally filtered by diary_ids).
+- For each post (enabled platform only):
+  - Validate length again (no regeneration).
+  - Enforce LinkedIn weekly cap.
+  - Publish via platform client (or simulate when dry_run).
+  - Log result in publish_logs; mark_post_as_published on success.
+
+Platform clients (dry-run friendly)
+- X: src/platform_clients/x_client.py uses OAuth1 credentials; dry_run prints instead of calling POST /2/tweets.
+- Threads: src/platform_clients/threads_client.py dry-run prints; real call would hit Graph API /{user_id}/threads with token.
+- LinkedIn: src/platform_clients/linkedin_client.py dry-run prints; real call builds UGC post payload with bearer token.
+
+Data layer: src/db/models.py and src/tools/data_tools.py
+- SQLite tables: diaries, posts, publish_logs, cost_logs.
+- Helpers: init_db(), get_connection(), utc_now_iso().
+- Data tools: hash + dedup diaries, store diary entries, store drafts, update status, log publish results, summarize costs, count LinkedIn publishes over a rolling window.
+
+Validation and content helpers
+- src/tools/validation_tools.py: character-limit checks per platform (no trimming).
+- src/tools/content_tools.py: LLM prompts for summary and platform drafts; regeneration prompts for too-long drafts.
+- src/tools/file_tools.py: read files safely (empty string if missing).
+
+LLM client: src/core/llm_client.py
+- Thin wrapper over OpenAI Responses API.
+- Uses config defaults for model/temperature; logs token usage via log_cost_entry().
+- Requires OPENAI_API_KEY in environment; pricing table in config drives cost estimates.
+
+Testing (current)
+- tests/test_data_tools_hash.py: checks hashing behavior for deduplication.
+- tests/test_platform_clients.py: asserts dry-run success and config error paths for X, Threads, LinkedIn clients.
