@@ -19,8 +19,8 @@ def _get_linkedin_api_config() -> tuple[str, str, str]:
         base_url, person_urn, access_token strings.
     """
     cfg = get_config()
-    linkedin_cfg = cfg.get("linkedin", {})
-    base_url = linkedin_cfg.get("base_url", "https://api.linkedin.com/v2/").rstrip("/")
+    linkedin_cfg = cfg.get("linkedin_api", {})
+    base_url = linkedin_cfg.get("base_url", "https://api.linkedin.com").rstrip("/")
 
     access_token = os.getenv("LINKEDIN_ACCESS_TOKEN")
     person_urn = os.getenv("LINKEDIN_PERSON_URN")

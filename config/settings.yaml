@@ -1,43 +1,79 @@
-# Global configuration for the agentic social diary project.
-
-llm:
-  provider: openai          
-  model: gpt-5-mini       
-  temperature: 0.7
-
-pricing:
-  gpt-5-mini:
-    input_per_1k: 0.00025   # USD
-    output_per_1k: 0.00200  # USD
+timezone: Europe/Oslo
 
 modes:
   dry_run: true
   llm_enabled: true
-
-platforms:
-  x_enabled: false
-  threads_enabled: false
-  linkedin_enabled: true
-
-
-platform_limits:
-  x_max_chars: 240          
-  threads_max_chars: 300    
-  linkedin_max_chars: 2000
-
-posting_limits:
-  linkedin_per_week: 3
-  
-x_api:
-  base_url: https://api.x.com
-threads_api:
-  base_url: https://graph.threads.net
-linkedin_api:
-  base_url: https://api.linkedin.com
+  approval_required: true
 
 database:
-  url: data/agent_posts.db
+  path: data/telegram_social_agent.db
 
-input_files:
-  diary_path: data/diary.txt
-  x_threads_path: data/x_threads.txt
+paths:
+  style_path: ./STYLE.md
+  models_path: ./MODELS.md
+
+telegram:
+  poll_interval_seconds: 1
+
+platforms:
+  x_enabled: true
+  threads_enabled: true
+  linkedin_enabled: true
+
+platform_limits:
+  x_max_chars: 280
+  threads_max_chars: 500
+  linkedin_max_chars: 3000
+
+routing:
+  summarize:
+    - openai:gpt-4.1-mini
+    - anthropic:claude-3-5-haiku-latest
+    - gemini:gemini-1.5-flash
+  draft_x:
+    - openai:gpt-4.1
+    - anthropic:claude-3-7-sonnet-latest
+    - gemini:gemini-1.5-pro
+  draft_threads:
+    - openai:gpt-4.1
+    - anthropic:claude-3-7-sonnet-latest
+    - gemini:gemini-1.5-pro
+  draft_linkedin:
+    - openai:gpt-4.1
+    - anthropic:claude-3-7-sonnet-latest
+    - gemini:gemini-1.5-pro
+  check:
+    - openai:gpt-4.1-nano
+    - anthropic:claude-3-5-haiku-latest
+    - gemini:gemini-1.5-flash-8b
+
+llm:
+  temperature: 0.4
+  max_tokens: 700
+  timeout_seconds: 30
+
+pricing:
+  openai:gpt-4.1-mini:
+    input_per_1k: 0.0004
+    output_per_1k: 0.0016
+  openai:gpt-4.1:
+    input_per_1k: 0.002
+    output_per_1k: 0.008
+  openai:gpt-4.1-nano:
+    input_per_1k: 0.0001
+    output_per_1k: 0.0004
+  anthropic:claude-3-5-haiku-latest:
+    input_per_1k: 0.00025
+    output_per_1k: 0.00125
+  anthropic:claude-3-7-sonnet-latest:
+    input_per_1k: 0.003
+    output_per_1k: 0.015
+  gemini:gemini-1.5-flash:
+    input_per_1k: 0.00015
+    output_per_1k: 0.0006
+  gemini:gemini-1.5-flash-8b:
+    input_per_1k: 0.00008
+    output_per_1k: 0.0003
+  gemini:gemini-1.5-pro:
+    input_per_1k: 0.00125
+    output_per_1k: 0.005
