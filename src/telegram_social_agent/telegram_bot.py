@@ -44,6 +44,7 @@ from .publishing import get_clients
 from .style_loader import load_style
 from .utils import json_loads
 from .validators import validate_draft
+from .llm.types import ProviderError
 
 try:
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -404,15 +405,21 @@ class TelegramAgentBot:
             requested = flags.get("publish_platforms") or []
             platforms = requested or enabled_platforms(self.config)
             router = self._router(conn)
-            draft_result = generate_drafts(
-                conn,
-                self.config,
-                router,
-                self.style_context,
-                entry_id=entry["id"],
-                platforms=platforms,
-                is_strict=bool(flags.get("strict")),
-            )
+            try:
+                draft_result = generate_drafts(
+                    conn,
+                    self.config,
+                    router,
+                    self.style_context,
+                    entry_id=entry["id"],
+                    platforms=platforms,
+                    is_strict=bool(flags.get("strict")),
+                )
+            except ProviderError:
+                await update.effective_chat.send_message(
+                    "Draft generation failed across all providers. Check API keys/model names or set llm_enabled=false."
+                )
+                return
 
         for row in draft_result["drafts"]:
             await self._send_draft(update, row["draft"], row["validation"])

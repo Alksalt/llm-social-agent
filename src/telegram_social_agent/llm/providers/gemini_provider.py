@@ -14,11 +14,11 @@ class GeminiProvider:
     name = "gemini"
 
     def __init__(self) -> None:
-        self._api_key = os.getenv("GEMINI_API_KEY")
+        self._api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 
     def generate(self, request: LLMRequest) -> LLMResult:
         if not self._api_key:
-            raise ProviderError("GEMINI_API_KEY missing")
+            raise ProviderError("GEMINI_API_KEY/GOOGLE_API_KEY missing")
 
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/{request.model}:generateContent"

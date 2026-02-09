@@ -29,6 +29,7 @@ from .models import (
 from .prompts import build_draft_prompt, build_summary_prompt, build_system_prompt
 from .utils import hash_text, json_loads
 from .validators import get_limit, truncate_to_limit, validate_draft
+from .llm.types import ProviderError
 
 PLATFORMS = ("x", "threads", "linkedin")
 
@@ -97,13 +98,16 @@ def summarize_entry(conn, config: Dict[str, Any], router, style_context: Dict[st
 
     system = build_system_prompt(style_context["contract"])
     prompt = build_summary_prompt(text)
-    result = router.generate(
-        stage="summarize",
-        prompt=prompt,
-        system=system,
-        meta={"entry_id": entry_id},
-    )
-    return result.text or text[:300]
+    try:
+        result = router.generate(
+            stage="summarize",
+            prompt=prompt,
+            system=system,
+            meta={"entry_id": entry_id},
+        )
+        return result.text or text[:300]
+    except ProviderError:
+        return text[:300]
 
 
 def _deterministic_draft(platform: str, summary: str, entry_text: str, limit: int) -> str:
@@ -148,13 +152,16 @@ def generate_drafts(
                 is_strict=is_strict,
                 limit=limit,
             )
-            result = router.generate(
-                stage=_stage_for_platform(platform),
-                prompt=prompt,
-                system=system,
-                meta={"entry_id": entry_id, "platform": platform, "strict": is_strict},
-            )
-            content = result.text.strip()
+            try:
+                result = router.generate(
+                    stage=_stage_for_platform(platform),
+                    prompt=prompt,
+                    system=system,
+                    meta={"entry_id": entry_id, "platform": platform, "strict": is_strict},
+                )
+                content = result.text.strip()
+            except ProviderError:
+                content = _deterministic_draft(platform, summary, entry["text"], limit)
         else:
             content = _deterministic_draft(platform, summary, entry["text"], limit)
 
@@ -165,14 +172,18 @@ def generate_drafts(
                     f"Rewrite this {platform} draft under {limit} chars without losing the core meaning.\n\n"
                     f"Original draft:\n{content}"
                 )
-                retry_result = router.generate(
-                    stage=_stage_for_platform(platform),
-                    prompt=retry_prompt,
-                    system=system,
-                    meta={"entry_id": entry_id, "platform": platform, "retry": True},
-                )
-                content = retry_result.text.strip()
-                validation = validate_draft(platform, content, config)
+                try:
+                    retry_result = router.generate(
+                        stage=_stage_for_platform(platform),
+                        prompt=retry_prompt,
+                        system=system,
+                        meta={"entry_id": entry_id, "platform": platform, "retry": True},
+                    )
+                    content = retry_result.text.strip()
+                    validation = validate_draft(platform, content, config)
+                except ProviderError:
+                    content = truncate_to_limit(content, limit)
+                    validation = validate_draft(platform, content, config)
             if not validation["ok"]:
                 content = truncate_to_limit(content, limit)
                 validation = validate_draft(platform, content, config)
@@ -242,13 +253,16 @@ def regenerate_draft(
             f"Regenerate this {platform} draft as a fresh alternative. Keep under {limit} chars.\n\n"
             f"Diary:\n{entry['text']}\n\nSummary:\n{summary}\n\nPrevious draft:\n{draft['content']}"
         )
-        result = router.generate(
-            stage=_stage_for_platform(platform),
-            prompt=prompt,
-            system=build_system_prompt(style_context["contract"]),
-            meta={"entry_id": entry["id"], "platform": platform, "regenerate_of": draft_id},
-        )
-        content = result.text.strip()
+        try:
+            result = router.generate(
+                stage=_stage_for_platform(platform),
+                prompt=prompt,
+                system=build_system_prompt(style_context["contract"]),
+                meta={"entry_id": entry["id"], "platform": platform, "regenerate_of": draft_id},
+            )
+            content = result.text.strip()
+        except ProviderError:
+            content = _deterministic_draft(platform, summary, entry["text"], limit)
     else:
         content = _deterministic_draft(platform, summary, entry["text"], limit)
 

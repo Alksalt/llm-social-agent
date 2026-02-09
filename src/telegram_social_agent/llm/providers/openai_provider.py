@@ -27,17 +27,22 @@ class OpenAIProvider:
             raise ProviderError("OPENAI_API_KEY missing")
 
         start = time.perf_counter()
+        payload: Dict[str, Any] = {
+            "model": request.model,
+            "max_output_tokens": request.max_tokens,
+            "input": [
+                {"role": "system", "content": request.system},
+                {"role": "user", "content": request.prompt},
+            ],
+            "timeout": request.timeout_seconds,
+        }
+
+        # GPT-5 family currently rejects `temperature`; omit it for compatibility.
+        if not request.model.startswith("gpt-5"):
+            payload["temperature"] = request.temperature
+
         try:
-            response = self._client.responses.create(
-                model=request.model,
-                temperature=request.temperature,
-                max_output_tokens=request.max_tokens,
-                input=[
-                    {"role": "system", "content": request.system},
-                    {"role": "user", "content": request.prompt},
-                ],
-                timeout=request.timeout_seconds,
-            )
+            response = self._client.responses.create(**payload)
         except Exception as exc:
             raise ProviderError(str(exc)) from exc
 

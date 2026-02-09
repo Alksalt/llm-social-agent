@@ -16,12 +16,14 @@ class AnthropicProvider:
 
     def __init__(self) -> None:
         self._api_key = os.getenv("ANTHROPIC_API_KEY")
+        base = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+        self._messages_url = f"{base.rstrip('/')}/v1/messages"
 
     def generate(self, request: LLMRequest) -> LLMResult:
         if not self._api_key:
             raise ProviderError("ANTHROPIC_API_KEY missing")
 
-        url = "https://api.anthropic.com/v1/messages"
+        url = self._messages_url
         headers = {
             "x-api-key": self._api_key,
             "anthropic-version": "2023-06-01",
@@ -38,9 +40,16 @@ class AnthropicProvider:
         start = time.perf_counter()
         try:
             res = requests.post(url, headers=headers, json=payload, timeout=request.timeout_seconds)
-            res.raise_for_status()
+            if res.status_code >= 400:
+                body = (res.text or "").strip()
+                trimmed = body[:300]
+                raise ProviderError(
+                    f"Anthropic HTTP {res.status_code} at {url} for model '{request.model}'. Response: {trimmed}"
+                )
             data = res.json()
         except Exception as exc:
+            if isinstance(exc, ProviderError):
+                raise
             raise ProviderError(str(exc)) from exc
 
         latency_ms = int((time.perf_counter() - start) * 1000)
