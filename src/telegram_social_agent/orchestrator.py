@@ -87,14 +87,24 @@ def ingest_entry(
     return {"ok": True, "reason": None, "entry": entry}
 
 
-def summarize_entry(conn, config: Dict[str, Any], router, style_context: Dict[str, Any], entry_id: int) -> str:
+def summarize_entry(
+    conn,
+    config: Dict[str, Any],
+    router,
+    style_context: Dict[str, Any],
+    entry_id: int,
+) -> tuple[str, Dict[str, Any]]:
     entry = get_entry(conn, entry_id)
     if not entry:
         raise ValueError(f"Entry not found: {entry_id}")
 
     text = entry["text"]
     if not _llm_enabled(config) or router is None:
-        return text[:300]
+        return text[:300], {
+            "mode": "fallback",
+            "stage": "summarize",
+            "reason": "llm_disabled_or_router_missing",
+        }
 
     system = build_system_prompt(style_context["contract"])
     prompt = build_summary_prompt(text)
@@ -105,9 +115,21 @@ def summarize_entry(conn, config: Dict[str, Any], router, style_context: Dict[st
             system=system,
             meta={"entry_id": entry_id},
         )
-        return result.text or text[:300]
-    except ProviderError:
-        return text[:300]
+        return (
+            result.text or text[:300],
+            {
+                "mode": "llm",
+                "stage": "summarize",
+                "provider": result.provider,
+                "model": result.model,
+            },
+        )
+    except ProviderError as exc:
+        return text[:300], {
+            "mode": "fallback",
+            "stage": "summarize",
+            "reason": str(exc)[:240],
+        }
 
 
 def _deterministic_draft(platform: str, summary: str, entry_text: str, limit: int) -> str:
@@ -134,7 +156,7 @@ def generate_drafts(
 
     user_id = entry["user_id"]
     platform_list = platforms or enabled_platforms(config)
-    summary = summarize_entry(conn, config, router, style_context, entry_id)
+    summary, summary_meta = summarize_entry(conn, config, router, style_context, entry_id)
     drafts: List[Dict[str, Any]] = []
     system = build_system_prompt(style_context["contract"])
 
@@ -160,10 +182,26 @@ def generate_drafts(
                     meta={"entry_id": entry_id, "platform": platform, "strict": is_strict},
                 )
                 content = result.text.strip()
+                generation_meta = {
+                    "mode": "llm",
+                    "stage": _stage_for_platform(platform),
+                    "provider": result.provider,
+                    "model": result.model,
+                }
             except ProviderError:
                 content = _deterministic_draft(platform, summary, entry["text"], limit)
+                generation_meta = {
+                    "mode": "fallback",
+                    "stage": _stage_for_platform(platform),
+                    "reason": "provider_error",
+                }
         else:
             content = _deterministic_draft(platform, summary, entry["text"], limit)
+            generation_meta = {
+                "mode": "fallback",
+                "stage": _stage_for_platform(platform),
+                "reason": "llm_disabled_or_router_missing",
+            }
 
         validation = validate_draft(platform, content, config)
         if not validation["ok"]:
@@ -196,6 +234,8 @@ def generate_drafts(
             status="pending",
             meta={
                 "summary": summary,
+                "summary_meta": summary_meta,
+                "generation": generation_meta,
                 "strict": is_strict,
                 "validation": validation,
             },
@@ -209,7 +249,7 @@ def generate_drafts(
 def set_draft_decision(conn, user_id: str, draft_id: int, new_status: str) -> Dict[str, Any]:
     draft = get_draft(conn, draft_id)
     if not draft:
-        return {"ok": False, "reason": "draft_not_found"}
+        return {"ok": False, "reason": "draft_not_found", "draft_id": draft_id}
 
     previous = {"status": draft["status"], "scheduled_at": draft["scheduled_at"]}
     updated = update_draft_status(conn, draft_id, new_status, draft["scheduled_at"])
@@ -345,16 +385,22 @@ def publish_draft(conn, config: Dict[str, Any], draft_id: int, clients: Dict[str
 
     approval_required = bool(config.get("modes", {}).get("approval_required", True))
     if approval_required and not force and draft["status"] not in {"approved", "scheduled"}:
-        return {"ok": False, "reason": "approval_required"}
+        return {"ok": False, "reason": "approval_required", "draft_id": draft["id"], "platform": draft["platform"]}
 
     validation = validate_draft(draft["platform"], draft["content"], config)
     if not validation["ok"]:
-        return {"ok": False, "reason": "invalid_draft", "validation": validation}
+        return {
+            "ok": False,
+            "reason": "invalid_draft",
+            "validation": validation,
+            "draft_id": draft["id"],
+            "platform": draft["platform"],
+        }
 
     dry_run = effective_dry_run(conn, config)
     client = clients.get(draft["platform"])
     if client is None:
-        return {"ok": False, "reason": "missing_platform_client"}
+        return {"ok": False, "reason": "missing_platform_client", "draft_id": draft["id"], "platform": draft["platform"]}
 
     try:
         response = client.publish(draft["content"], dry_run=dry_run)
@@ -367,7 +413,13 @@ def publish_draft(conn, config: Dict[str, Any], draft_id: int, clients: Dict[str
             error=None,
         )
         update_draft_status(conn, draft["id"], "published", None)
-        return {"ok": True, "draft_id": draft["id"], "response": response, "dry_run": dry_run}
+        return {
+            "ok": True,
+            "draft_id": draft["id"],
+            "platform": draft["platform"],
+            "response": response,
+            "dry_run": dry_run,
+        }
     except Exception as exc:
         create_publish_log(
             conn,
@@ -377,7 +429,14 @@ def publish_draft(conn, config: Dict[str, Any], draft_id: int, clients: Dict[str
             response=None,
             error=str(exc),
         )
-        return {"ok": False, "reason": "publish_failed", "error": str(exc), "dry_run": dry_run}
+        return {
+            "ok": False,
+            "reason": "publish_failed",
+            "error": str(exc),
+            "dry_run": dry_run,
+            "draft_id": draft["id"],
+            "platform": draft["platform"],
+        }
 
 
 def publish_approved_queue(conn, config: Dict[str, Any], user_id: str, clients: Dict[str, Any]) -> Dict[str, Any]:
@@ -441,9 +500,25 @@ def format_draft_message(draft: Dict[str, Any], validation: Dict[str, Any] | Non
     v = validation
     if not v:
         v = {"ok": True, "length": len(draft["content"]), "limit": "?"}
+    meta = json_loads(draft.get("meta_json"))
+    generation = meta.get("generation", {}) if isinstance(meta, dict) else {}
+    summary_meta = meta.get("summary_meta", {}) if isinstance(meta, dict) else {}
+
+    if generation.get("mode") == "llm":
+        writer_line = f"Writer: {generation.get('provider')}:{generation.get('model')}"
+    else:
+        writer_line = "Writer: template fallback"
+
+    if summary_meta.get("mode") == "llm":
+        summary_line = f"Summary model: {summary_meta.get('provider')}:{summary_meta.get('model')}"
+    else:
+        summary_line = "Summary model: fallback"
+
     return (
         f"Draft #{draft['id']} | {draft['platform'].upper()} | v{draft['version']} | status={draft['status']}\n"
         f"Validation: {'OK' if v['ok'] else 'TOO LONG'} ({v['length']}/{v['limit']})\n\n"
+        f"{writer_line}\n"
+        f"{summary_line}\n\n"
         f"{draft['content']}"
     )
 

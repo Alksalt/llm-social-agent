@@ -1,155 +1,137 @@
 # Telegram LLM Social Agent
 
-A Telegram-bot-driven version of `llm-social-agent`.
+Turn diary-style messages into reviewable social drafts in Telegram, then publish to X, Threads, or LinkedIn.
 
-Users send diary entries to a Telegram bot, trigger drafting/publishing with commands or hashtags, review drafts with inline buttons, and publish (or dry-run) to X, Threads, and LinkedIn.
+## What You Get
 
-## Features
+- Send normal text messages as entries
+- Trigger draft generation with `#draft` or `/draft`
+- Review each draft with buttons (`Approve`, `Approve + Publish`, `Regenerate`, `Edit`, `Schedule`)
+- Approval-first publishing flow by default
+- Multi-LLM routing with fallback (OpenAI, Anthropic, Gemini)
+- SQLite persistence, logs, and scheduler support
 
-- Telegram-first UX (`/capture`, `/draft`, `/publish`, `/queue`, `/status`, `/undo`, inline draft actions)
-- SQLite persistence with migrations
-- Per-user dedupe via `UNIQUE(user_id, text_hash)`
-- Stage-based pipeline:
-  - ingest -> summarize -> generate -> validate -> approve -> publish/schedule
-- Dry-run publishing adapters for X, Threads, LinkedIn
-- Multi-provider LLM routing by stage with fallback:
-  - OpenAI (default)
-  - Anthropic
-  - Gemini
-- Token/cost/latency logging for LLM calls
-- STYLE.md and MODELS.md runtime integration with safe fallback
+## Quick Start
 
-## Repo layout
-
-- `main.py` - bot + scheduler CLI entrypoint
-- `config/settings.yaml` - runtime config
-- `src/telegram_social_agent/orchestrator.py` - pure pipeline functions
-- `src/telegram_social_agent/telegram_bot.py` - Telegram handlers and inline UI
-- `src/telegram_social_agent/models.py` - SQLite schema, migrations, and DB helpers
-- `src/telegram_social_agent/llm/` - provider routing + provider adapters
-- `src/telegram_social_agent/platform_clients/` - social publish adapters
-- `tests/` - required pytest coverage
-
-## Setup
-
-1. Create env file from template:
+1. Create env file:
 
 ```bash
 cp .env.example .env
 ```
 
-2. Fill tokens/secrets in `.env`.
+2. Fill at minimum:
+- `TELEGRAM_BOT_TOKEN`
+- One or more LLM keys:
+  - `OPENAI_API_KEY`
+  - `ANTHROPIC_API_KEY`
+  - `GEMINI_API_KEY` or `GOOGLE_API_KEY`
 
-3. Install dependencies (uv-friendly):
+3. Install:
 
 ```bash
-uv sync
+uv sync --extra dev
 ```
 
-or with pip:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .[dev]
-```
-
-## Telegram BotFather setup
-
-1. Open Telegram and chat with [@BotFather](https://t.me/BotFather).
-2. Run `/newbot` and complete the prompts.
-3. Copy the bot token and set `TELEGRAM_BOT_TOKEN` in `.env`.
-4. Start your bot and message it directly.
-
-## Run locally (dry-run)
-
-Apply DB migrations:
+4. Init DB and run:
 
 ```bash
 python main.py init-db
-```
-
-Run bot:
-
-```bash
 python main.py
 ```
 
-`dry_run` defaults to `true`, so publish calls are simulated unless toggled.
+Default is dry-run mode (`dry_run: true`), so publishes are simulated until you switch it off.
 
-## Scheduler job usage
+## Daily Usage
 
-Schedule button stores `scheduled_at` and `status=scheduled`.
-Run due jobs with cron/systemd:
+### Fast flow from one message
+
+Send:
+
+```text
+Today I shipped scheduler improvements and fixed fallback logic. #draft linkedin
+```
+
+Bot behavior:
+1. Stores entry
+2. Generates drafts
+3. Shows draft cards with buttons
+
+### Publish flow
+
+- `Approve` -> bot asks: "Publish now?" (Yes/Not now)
+- `Approve + Publish` -> auto-approves (if needed) and publishes immediately
+- `/publish` -> publishes all approved drafts
+- `/publish 12` -> publishes one draft by ID
+
+### Scheduling
+
+1. Click `Schedule` on a draft
+2. Send time in `Europe/Oslo` format:
+   - `YYYY-MM-DD HH:MM`
+   - example: `2026-02-10 09:30`
+3. Run scheduler worker periodically:
 
 ```bash
 python main.py run-scheduler
 ```
 
-Default timezone is `Europe/Oslo` (configurable in `settings.yaml`).
-
-## STYLE.md and MODELS.md
-
-The app expects these paths by default:
-
-- `./STYLE.md`
-- `./MODELS.md`
-
-Configured via:
-
-- `paths.style_path`
-- `paths.models_path`
-
-Behavior:
-
-- If present: loaded at runtime
-- If missing: built-in default style contract/templates and default stage routing are used
-
-## Commands and directives
-
-### Commands
+## Commands
 
 - `/start`
-- `/capture`
-- `/done`
+- `/capture` start multi-message capture
+- `/done` store captured buffer as one entry
 - `/draft [platforms]`
 - `/publish [draft_id]`
-- `/queue`
-- `/status`
+- `/queue` show pending drafts
+- `/status` show dry-run, last publish, LLM usage
 - `/dryrun on|off`
 - `/undo`
 - `/style show`
 - `/provider show`
 - `/provider set <stage> <provider:model,provider:model>`
 
-### Hashtag directives in messages
+## Message Directives
 
-- `#draft`
-- `#publish x linkedin threads`
-- `#private`
-- `#strict`
+- `#draft` generate drafts
+- `#publish x linkedin threads` generate drafts for listed platforms and guide you through publish flow
+- `#private` store only; skip drafting/publishing
+- `#strict` more conservative wording
 
-## Routing and provider configuration
+## Model Routing
 
-Edit `config/settings.yaml`:
+Configure in `/Users/alt/Library/CloudStorage/OneDrive-Personal/Portfolio/llm-social-agent/config/settings.yaml`:
 
-- `routing.<stage>` is an ordered list of `provider:model`
-- Router tries first provider/model, then falls back on errors/timeouts
-- Stage defaults follow policy:
-  - summaries = cheaper models
-  - draft writing = premium-but-pragmatic models
-  - checks = cheapest models
+- `routing.summarize`
+- `routing.draft_x`
+- `routing.draft_threads`
+- `routing.draft_linkedin`
+- `routing.check`
+
+Router tries models in order and falls back on provider/model failures.
+Draft cards also show which model wrote the draft and which model made the summary.
+
+## STYLE.md and MODELS.md
+
+By default:
+- `./STYLE.md`
+- `./MODELS.md`
+
+If missing, the bot uses safe built-in defaults.
+
+## Troubleshooting
+
+- "Entry stored, but no drafts":
+  - You did not include `#draft` or `#publish`
+  - Or all target platforms are disabled in config
+- "Published 0/N approved drafts":
+  - Inspect per-draft reasons in bot response
+  - Most common: missing platform credentials or validation failure
+- Anthropic/Gemini errors:
+  - confirm env vars loaded correctly
+  - verify model names in `routing`
 
 ## Tests
 
 ```bash
-pytest
+uv run pytest
 ```
-
-Includes:
-
-- dedupe hashing
-- routing fallback
-- dry-run platform publish
-- validator truncation
-- DB migration smoke test

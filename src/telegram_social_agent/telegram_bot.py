@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List
@@ -67,6 +68,7 @@ class TelegramAgentBot:
         self.db_path = str(config["database"]["path"])
         self.style_context = load_style(config["paths"]["style_path"])
         self.models_reference = load_models_reference(config["paths"]["models_path"])
+        self.logger = logging.getLogger(__name__)
 
     @staticmethod
     def _draft_keyboard(draft_id: int) -> InlineKeyboardMarkup:
@@ -80,11 +82,22 @@ class TelegramAgentBot:
                 InlineKeyboardButton("Edit", callback_data=f"draft:edit:{draft_id}"),
             ],
             [
-                InlineKeyboardButton("Publish Now", callback_data=f"draft:publish:{draft_id}"),
+                InlineKeyboardButton("Approve + Publish", callback_data=f"draft:publish:{draft_id}"),
                 InlineKeyboardButton("Schedule", callback_data=f"draft:schedule:{draft_id}"),
             ],
         ]
         return InlineKeyboardMarkup(buttons)
+
+    @staticmethod
+    def _publish_prompt_keyboard(draft_id: int) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("Yes, Publish", callback_data=f"draft:pubyes:{draft_id}"),
+                    InlineKeyboardButton("Not now", callback_data=f"draft:publater:{draft_id}"),
+                ]
+            ]
+        )
 
     @staticmethod
     def _user_id(update: Update) -> str:
@@ -97,10 +110,35 @@ class TelegramAgentBot:
     def _router(self, conn):
         return LLMRouter(self.config, conn, models_reference=self.models_reference)
 
+    @staticmethod
+    def _publish_hint_for_failure(result: Dict[str, Any]) -> str:
+        reason = result.get("reason") or "unknown_error"
+        if reason == "approval_required":
+            return "Needs approval first. Tap Approve or use /queue."
+        if reason == "invalid_draft":
+            return "Draft failed validation (likely over char limit). Regenerate or edit."
+        if reason == "publish_failed":
+            err = result.get("error", "")
+            if "Missing LinkedIn credentials" in err:
+                return "Missing LinkedIn credentials. Check LINKEDIN_ACCESS_TOKEN and LINKEDIN_PERSON_URN."
+            if "Missing X API credentials" in err:
+                return "Missing X credentials. Check X_* env vars."
+            if "Missing Threads credentials" in err:
+                return "Missing Threads credentials. Check THREADS_* env vars."
+            return f"Publisher error: {err[:180]}"
+        if reason == "missing_platform_client":
+            return "No platform client configured."
+        return reason
+
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(
+            "Hi. I can turn your diary text into social drafts and publish after approval.\n\n"
+            "Main flow:\n"
+            "1) Send text (+ optional #draft or #publish linkedin)\n"
+            "2) Review draft cards\n"
+            "3) Approve/Publish or Schedule\n\n"
             "Commands: /capture /done /draft [platforms] /publish [draft_id] /queue /status /dryrun on|off /undo\n"
-            "Hashtags: #draft #publish x linkedin threads #private #strict"
+            "Directives: #draft #publish x linkedin threads #private #strict"
         )
 
     async def capture(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -136,6 +174,10 @@ class TelegramAgentBot:
             flags = json_loads(entry.get("flags_json"))
             is_strict = bool(flags.get("strict", False))
             router = self._router(conn)
+            await update.message.reply_text(
+                f"Generating drafts for: {', '.join(platforms)}"
+                + (" (strict mode)." if is_strict else ".")
+            )
             result = generate_drafts(
                 conn,
                 self.config,
@@ -164,14 +206,28 @@ class TelegramAgentBot:
                 if result["ok"]:
                     await update.message.reply_text(f"Draft {draft_id} published (dry_run={result['dry_run']}).")
                 else:
-                    await update.message.reply_text(f"Publish failed: {result.get('reason') or result.get('error')}")
+                    await update.message.reply_text(
+                        f"Publish failed for draft #{draft_id}: {self._publish_hint_for_failure(result)}"
+                    )
                 return
 
             queue_result = publish_approved_queue(conn, self.config, user_id=user_id, clients=clients)
 
         ok_count = sum(1 for item in queue_result["results"] if item.get("ok"))
         total = len(queue_result["results"])
-        await update.message.reply_text(f"Published {ok_count}/{total} approved drafts.")
+        if total == 0:
+            await update.message.reply_text("No approved drafts found. Use /queue to approve drafts first.")
+            return
+
+        lines = [f"Published {ok_count}/{total} approved drafts."]
+        for item in queue_result["results"]:
+            draft_id = item.get("draft_id", "?")
+            platform = str(item.get("platform", "?")).upper()
+            if item.get("ok"):
+                lines.append(f"- Draft #{draft_id} ({platform}): published (dry_run={item.get('dry_run')})")
+            else:
+                lines.append(f"- Draft #{draft_id} ({platform}): {self._publish_hint_for_failure(item)}")
+        await update.message.reply_text("\n".join(lines))
 
     async def queue(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user_id = self._user_id(update)
@@ -274,6 +330,10 @@ class TelegramAgentBot:
                 result = set_draft_decision(conn, user_id, draft_id, "approved")
                 if result["ok"]:
                     await query.edit_message_text(f"Draft {draft_id} approved.")
+                    await update.effective_chat.send_message(
+                        f"Draft {draft_id} approved. Publish now?",
+                        reply_markup=self._publish_prompt_keyboard(draft_id),
+                    )
                 else:
                     await query.edit_message_text(f"Failed: {result['reason']}")
                 return
@@ -309,11 +369,30 @@ class TelegramAgentBot:
                 return
 
             if action == "publish":
+                draft = get_draft(conn, draft_id)
+                if draft and draft.get("status") != "approved":
+                    set_draft_decision(conn, user_id, draft_id, "approved")
                 result = publish_draft(conn, self.config, draft_id, clients=get_clients())
                 if result["ok"]:
                     await query.edit_message_text(f"Draft {draft_id} published (dry_run={result['dry_run']}).")
                 else:
-                    await query.edit_message_text(f"Publish failed: {result.get('reason') or result.get('error')}")
+                    await query.edit_message_text(
+                        f"Publish failed for draft #{draft_id}: {self._publish_hint_for_failure(result)}"
+                    )
+                return
+
+            if action == "pubyes":
+                result = publish_draft(conn, self.config, draft_id, clients=get_clients())
+                if result["ok"]:
+                    await query.edit_message_text(f"Draft {draft_id} published (dry_run={result['dry_run']}).")
+                else:
+                    await query.edit_message_text(
+                        f"Publish failed for draft #{draft_id}: {self._publish_hint_for_failure(result)}"
+                    )
+                return
+
+            if action == "publater":
+                await query.edit_message_text(f"Kept draft {draft_id} approved. Use /publish when ready.")
                 return
 
             if action == "schedule":
@@ -400,10 +479,20 @@ class TelegramAgentBot:
 
             wants_draft = bool(flags.get("draft")) or bool(flags.get("publish"))
             if not wants_draft:
+                await update.effective_chat.send_message(
+                    "Saved. Next step: send /draft linkedin (or include #draft in your message)."
+                )
                 return
 
             requested = flags.get("publish_platforms") or []
             platforms = requested or enabled_platforms(self.config)
+            await update.effective_chat.send_message(
+                f"Generating drafts for: {', '.join(platforms)}. This can take a few seconds..."
+            )
+            if flags.get("publish"):
+                await update.effective_chat.send_message(
+                    "You used #publish. Approval is still required by default, so review and tap Approve + Publish."
+                )
             router = self._router(conn)
             try:
                 draft_result = generate_drafts(
@@ -421,8 +510,24 @@ class TelegramAgentBot:
                 )
                 return
 
+        if not draft_result["drafts"]:
+            await update.effective_chat.send_message(
+                "No drafts were generated. Check platform toggles in settings.yaml and try /draft linkedin."
+            )
+            return
+
+        await update.effective_chat.send_message(
+            f"Draft generation complete: {len(draft_result['drafts'])} draft(s). Review below."
+        )
         for row in draft_result["drafts"]:
             await self._send_draft(update, row["draft"], row["validation"])
+
+    async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        self.logger.exception("Unhandled bot error", exc_info=context.error)
+        if isinstance(update, Update) and update.effective_chat:
+            await update.effective_chat.send_message(
+                "Unexpected error while processing your request. Try /status, then retry."
+            )
 
     def build_application(self) -> Application:
         if ApplicationBuilder is None:
@@ -446,6 +551,7 @@ class TelegramAgentBot:
         app.add_handler(CommandHandler("provider", self.provider))
         app.add_handler(CallbackQueryHandler(self.callback_handler, pattern=r"^draft:"))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.message_handler))
+        app.add_error_handler(self.error_handler)
         return app
 
     def run_polling(self) -> None:
