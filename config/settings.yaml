@@ -17,7 +17,7 @@ telegram:
 
 platforms:
   x_enabled: true
-  threads_enabled: true
+  threads_enabled: false
   linkedin_enabled: true
 
 platform_limits:
