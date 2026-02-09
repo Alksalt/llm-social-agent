@@ -41,12 +41,12 @@ Routing is configured in `settings.yaml` so you can swap models per stage withou
    - Base input: **$5 / MTok**  
    - Output: **$25 / MTok**
 
-3) **claude-sonnet-4.5**  
+3) **claude-sonnet-4-5**  
    - Base input: **$3 / MTok**  
    - Output: **$15 / MTok**
 
 ### Cheap tier (for summaries/checks)
-- **claude-haiku-4.5**  
+- **claude-haiku-4-5**  
   - Base input: **$1 / MTok**  
   - Output: **$5 / MTok**
 
@@ -87,26 +87,26 @@ Routing is configured in `settings.yaml` so you can swap models per stage withou
 ```yaml
 routing:
   summarize:
-    - anthropic:claude-haiku-4.5
+    - anthropic:claude-haiku-4-5
     - openai:gpt-5-mini
-    - google:gemini-3-flash-preview
+    - gemini:gemini-3-flash-preview
 
   draft_x:
-    - anthropic:claude-sonnet-4.5
+    - anthropic:claude-sonnet-4-5
     - openai:gpt-5.2
-    - google:gemini-3-pro-preview
+    - gemini:gemini-3-pro-preview
 
   draft_linkedin:
-    - anthropic:claude-sonnet-4.5
+    - anthropic:claude-sonnet-4-5
     - openai:gpt-5.2
-    - google:gemini-3-pro-preview
+    - gemini:gemini-3-pro-preview
 
   draft_threads:
-    - anthropic:claude-sonnet-4.5
+    - anthropic:claude-sonnet-4-5
     - openai:gpt-5.2
-    - google:gemini-3-flash-preview
+    - gemini:gemini-3-flash-preview
 
   check:
     - openai:gpt-5-nano
-    - anthropic:claude-haiku-4.5
-    - google:gemini-2.5-flash-lite
+    - anthropic:claude-haiku-4-5
+    - gemini:gemini-2.5-flash-lite
